@@ -28,6 +28,12 @@
       "run_at": "document_idle"
     },
     {
+      "matches": ["*://students.amrita.edu/*"],
+      "js": ["dialog-overrides.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
       "matches": [
         "*://*.cloud.microsoft/*",
         "*://*.office.com/*",

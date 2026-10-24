@@ -6,9 +6,6 @@
 
   console.log("[Amrita Automator] Injected on:", window.location.href);
 
-  // Auto-accept native window.confirm & window.alert in page context (MAIN world)
-  injectDialogOverrides();
-
   let isRunning = localStorage.getItem("amrita_auto_running") === "true";
   let lastUsedOtp = localStorage.getItem("amrita_last_otp") || "";
   let originListPage = localStorage.getItem("amrita_origin_list") || "";
@@ -17,35 +14,6 @@
 
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  // ==========================================
-  // INJECT OVERRIDES FOR NATIVE DIALOGS
-  // ==========================================
-  function injectDialogOverrides() {
-    try {
-      const s = document.createElement("script");
-      s.textContent = `
-        (function() {
-          if (window.__amrita_dialog_overridden) return;
-          window.__amrita_dialog_overridden = true;
-          const origConfirm = window.confirm;
-          window.confirm = function(msg) {
-            console.log("[Amrita Page] Auto-accepting native confirm:", msg);
-            return true;
-          };
-          const origAlert = window.alert;
-          window.alert = function(msg) {
-            console.log("[Amrita Page] Auto-dismissing native alert:", msg);
-            return true;
-          };
-        })();
-      `;
-      (document.head || document.documentElement).appendChild(s);
-      s.remove();
-    } catch (e) {
-      console.warn("[Amrita] Dialog override notice:", e);
-    }
   }
 
   // ==========================================

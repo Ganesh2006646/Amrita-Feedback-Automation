@@ -103,13 +103,10 @@ amrita.js                 Portal widget, OTP flow, answers, and submission
 background.js             Cross-tab coordination
 outlook.js                Outlook OTP retrieval
 widget.css                Floating widget appearance
-feedback_auto.py          Separate legacy Selenium class-feedback runner
-RUN_ME.bat                Windows launcher for that Python runner
-amrita_feedback.user.js   Separate legacy class-feedback userscript
 README.md                 This guide
 ```
 
-Use the **Chrome extension** for the two-flow behavior documented here. The Python runner and userscript are separate, class-oriented implementations; they are not interchangeable with the extension and were not updated for the course OTP-first flow.
+Use the **Chrome extension** for the two-flow behavior documented here.
 
 ## Privacy and limitations
 
