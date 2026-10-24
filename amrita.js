@@ -177,15 +177,15 @@
   async function handleFeedbackForm() {
     if (!isRunning) return;
 
-    // STEP A: Check if we are on the final "Finish" screen (Course Feedback)
-    if (isFinishScreen()) {
-      await handleFinishStep();
+    // OTP must take priority, even when the page also shows a Finish warning.
+    // Course: OTP -> questions -> Finish. Class TLP: questions -> OTP.
+    if (isOnOtpScreen()) {
+      await handleOtpFlow();
       return;
     }
 
-    // STEP B: Check if we are on the OTP screen (Step 16 in Class TLP OR start of Course Feedback)
-    if (isOnOtpScreen()) {
-      await handleOtpFlow();
+    if (isFinishScreen()) {
+      await handleFinishStep();
       return;
     }
 
@@ -212,10 +212,10 @@
     } else {
       // No radio options found — check if Finish screen or OTP screen appeared
       await sleep(1000);
-      if (isFinishScreen()) {
-        await handleFinishStep();
-      } else if (isOnOtpScreen()) {
+      if (isOnOtpScreen()) {
         await handleOtpFlow();
+      } else if (isFinishScreen()) {
+        await handleFinishStep();
       } else {
         checkIfDone();
       }
@@ -258,15 +258,13 @@
 
   function isFinishScreen() {
     const bodyText = (document.body ? document.body.innerText : "") || "";
-    // Matches the banner from user's screenshot: "Once you finished feedback, you can not update feedback."
-    if (/once you finished feedback/i.test(bodyText) || /can not update feedback/i.test(bodyText)) {
-      return true;
-    }
-
-    // Or Finish button is visible with NO question radios present
+    // A warning banner alone is not a final step. Never skip OTP or questions.
+    if (isOnOtpScreen()) return false;
     const finishBtn = findFinishButton();
-    const hasRadios = document.querySelector("input[name='option_id'], input[type='radio']");
-    return finishBtn !== null && !hasRadios;
+    const hasQuestions = Array.from(document.querySelectorAll(
+      "input[name='option_id'], input[type='radio'], label.form-check-label, .custom-radio-card, .option-card"
+    )).some(el => !el.closest("#amrita-automator-widget") && isVisible(el));
+    return finishBtn !== null && !hasQuestions;
   }
 
   function findFinishButton() {
@@ -444,6 +442,13 @@
       dismissPopups();
       await sleep(1000);
 
+      // A click is not proof of OTP acceptance. Keep rejected/pending OTP open.
+      if (isOnOtpScreen()) {
+        log("⚠ OTP verification still pending. Check portal message and retry OTP manually.");
+        updateBadge("CHECK OTP", "waiting");
+        return;
+      }
+
       // Check if Finish screen appeared
       if (isFinishScreen()) {
         await handleFinishStep();
@@ -459,7 +464,14 @@
         return;
       }
 
-      // If no questions and no finish button, form is complete (Class TLP flow)
+      // Course verification must lead to questions, not be mistaken for submission.
+      if (originListPage === "course-feedback-list" || window.location.pathname.includes("course-feedback")) {
+        log("⚠ Waiting for course questions after OTP. Tab kept open; check portal before continuing.");
+        updateBadge("CHECK FORM", "waiting");
+        return;
+      }
+
+      // Class TLP validates OTP at the end of its question flow.
       log("✅ Verified! Closing tab and refreshing portal...");
       await sleep(1000);
       closeAndRefreshPortal();
@@ -716,9 +728,9 @@
     const widget = document.createElement("div");
     widget.id = "amrita-automator-widget";
     widget.innerHTML = `
-      <div class="aaw-header">
-        <div class="aaw-title">⚡ Amrita Feedback Auto</div>
-        <button class="aaw-btn-icon" id="aaw-min-btn" title="Minimize">−</button>
+      <div class="aaw-header" tabindex="0" role="group" aria-label="Move feedback panel. Drag or use arrow keys; Shift moves faster.">
+        <div class="aaw-brand"><span class="aaw-grip" aria-hidden="true">⠿</span><div><div class="aaw-title">Amrita Feedback</div><div class="aaw-subtitle">Drag to move</div></div></div>
+        <button type="button" class="aaw-btn-icon" id="aaw-min-btn" title="Minimize panel" aria-label="Minimize panel" aria-expanded="true">−</button>
       </div>
       <div class="aaw-body">
         <div class="aaw-info-row">
@@ -727,15 +739,19 @@
         </div>
         <div class="aaw-log" id="aaw-log-box">${readyMsg}</div>
         <div class="aaw-actions">
-          <button class="aaw-btn aaw-btn-start" id="aaw-start-btn">▶ Start Auto-Submit All</button>
-          <button class="aaw-btn aaw-btn-stop" id="aaw-stop-btn" style="display:none;">⏸ Pause</button>
+          <button type="button" class="aaw-btn aaw-btn-start" id="aaw-start-btn">Start Auto-Submit All</button>
+          <button type="button" class="aaw-btn aaw-btn-stop" id="aaw-stop-btn" style="display:none;">Pause automation</button>
         </div>
-        <button class="aaw-btn aaw-btn-check" id="aaw-check-outlook-btn">🔍 Fetch OTP from Outlook</button>
-        <div class="aaw-manual-otp-group">
-          <input type="text" class="aaw-input" id="aaw-manual-otp-input" placeholder="Manual OTP">
-          <button class="aaw-btn aaw-btn-check" id="aaw-submit-manual-otp-btn">Submit OTP</button>
+        <div class="aaw-otp-section">
+          <label class="aaw-field-label" for="aaw-manual-otp-input">OTP verification</label>
+          <button type="button" class="aaw-btn aaw-btn-check" id="aaw-check-outlook-btn">Fetch OTP from Outlook</button>
+          <div class="aaw-manual-otp-group">
+            <input type="text" class="aaw-input" id="aaw-manual-otp-input" placeholder="Enter OTP manually" autocomplete="off" spellcheck="false">
+            <button type="button" class="aaw-btn aaw-btn-check" id="aaw-submit-manual-otp-btn">Submit OTP</button>
+          </div>
         </div>
-        <div class="aaw-footer">Option 1 • TLP & Course Feedback • Auto-Finish Loop</div>
+        <a class="aaw-btn aaw-btn-check aaw-github-star" href="https://github.com/Ganesh2006646/Amrita-Feedback-Automation" target="_blank" rel="noopener noreferrer" aria-label="Star on GitHub (opens repository in a new tab)"><span aria-hidden="true">☆</span> Star on GitHub</a>
+        <div class="aaw-footer">Selects Option 1 and submits feedback automatically.</div>
       </div>
     `;
 
@@ -747,13 +763,15 @@
       log("⏸ Paused by user.");
       updateBadge("PAUSED", "idle");
     });
+    setupWidgetMovement(widget);
     document.getElementById("aaw-min-btn").addEventListener("click", () => {
-      widget.classList.toggle("minimized");
-    });
-    widget.addEventListener("click", (e) => {
-      if (widget.classList.contains("minimized") && (e.target === widget || e.target.closest("#amrita-automator-widget") === widget)) {
-        widget.classList.remove("minimized");
-      }
+      const minimized = widget.classList.toggle("minimized");
+      const button = document.getElementById("aaw-min-btn");
+      button.textContent = minimized ? "+" : "−";
+      button.setAttribute("aria-expanded", String(!minimized));
+      button.setAttribute("aria-label", minimized ? "Expand panel" : "Minimize panel");
+      button.title = minimized ? "Expand panel" : "Minimize panel";
+      widget.dispatchEvent(new Event("aaw-resize"));
     });
     document.getElementById("aaw-check-outlook-btn").addEventListener("click", () => {
       log("Manually fetching OTP...");
@@ -775,6 +793,57 @@
       document.getElementById("aaw-start-btn").style.display = "none";
       document.getElementById("aaw-stop-btn").style.display = "flex";
     }
+  }
+
+  function setupWidgetMovement(widget) {
+    const header = widget.querySelector(".aaw-header");
+    let drag = null;
+    function place(left, top) {
+      const rect = widget.getBoundingClientRect();
+      const x = Math.max(0, Math.min(left, Math.max(0, window.innerWidth - rect.width)));
+      const y = Math.max(0, Math.min(top, Math.max(0, window.innerHeight - rect.height)));
+      Object.assign(widget.style, { left: `${x}px`, top: `${y}px`, right: "auto", bottom: "auto" });
+    }
+    function keepInView() {
+      const rect = widget.getBoundingClientRect();
+      place(rect.left, rect.top);
+    }
+    header.addEventListener("pointerdown", event => {
+      if (event.target.closest("button") || !event.isPrimary || event.button !== 0) return;
+      const rect = widget.getBoundingClientRect();
+      drag = { id: event.pointerId, x: event.clientX - rect.left, y: event.clientY - rect.top };
+      header.setPointerCapture(event.pointerId);
+      widget.classList.add("aaw-dragging");
+      event.preventDefault();
+      header.focus({ preventScroll: true });
+    });
+    header.addEventListener("pointermove", event => {
+      if (!drag || event.pointerId !== drag.id) return;
+      place(event.clientX - drag.x, event.clientY - drag.y);
+    });
+    function endDrag(event) {
+      if (!drag || event.pointerId !== drag.id) return;
+      drag = null;
+      widget.classList.remove("aaw-dragging");
+      if (header.hasPointerCapture(event.pointerId)) header.releasePointerCapture(event.pointerId);
+    }
+    header.addEventListener("pointerup", endDrag);
+    header.addEventListener("pointercancel", endDrag);
+    header.addEventListener("lostpointercapture", endDrag);
+    header.addEventListener("keydown", event => {
+      if (event.target !== header) return;
+      const directions = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+      const direction = directions[event.key];
+      if (!direction) return;
+      event.preventDefault();
+      const rect = widget.getBoundingClientRect();
+      const step = event.shiftKey ? 40 : 10;
+      place(rect.left + direction[0] * step, rect.top + direction[1] * step);
+    });
+    window.addEventListener("resize", keepInView);
+    widget.addEventListener("aaw-resize", keepInView);
+    if (typeof ResizeObserver !== "undefined") new ResizeObserver(keepInView).observe(widget);
+    keepInView();
   }
 
   function startAutomation() {
