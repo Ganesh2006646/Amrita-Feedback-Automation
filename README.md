@@ -1,56 +1,50 @@
-# ⚡ Amrita Student Portal Feedback Automator
+# ⚡ Amrita Student Portal Feedback Automator (v2.0.0)
 
-Automates the entire feedback submission process for Amrita Student Portal:
-- Scans `https://students.amrita.edu/client/class-feedback` for uncompleted courses.
-- Opens each course feedback form.
-- Automatically selects the **1st option** for all **15 questions**.
-- Clicks **Save & Next** on each question.
-- On Question 16 (Finish):
-  1. Clicks **SEND OTP**.
-  2. Communicates with your open **Outlook Web** tab (`outlook.office.com`).
-  3. Finds the latest OTP email from `Amrita Vishwa Vidyapeetham`.
-  4. Extracts the verification OTP (e.g. `K2tER`).
-  5. Inputs the OTP into the verification box and clicks **Validate & Finish**.
-- Automatically loops through **all remaining courses** until 100% complete!
+A fast, automated Chrome extension that completes student feedback submissions on `students.amrita.edu` with full OTP verification from Outlook and automatic course looping.
 
 ---
 
-## 🚀 Quick Setup (Takes 15 seconds)
+## 🌟 Supported Feedback Types
 
-### Method 1: Chrome Extension (Recommended - Zero Setup)
+1. **Course Feedback (`/client/course-feedback-list`)**:
+   - Detects all pending courses in the table.
+   - Automatically opens course feedback form.
+   - Triggers **SEND OTP** (which comes first in Course Feedback).
+   - Reads the latest verification OTP directly from your active Outlook tab (`outlook.cloud.microsoft` / `outlook.office.com`).
+   - Validates OTP and automatically proceeds to answer all 5 questions with **Option 1**.
+   - Clicks **Finish**, auto-confirms the submission dialog ("OK"), closes the tab, and refreshes the course list to start the next course!
 
-1. Open Google Chrome and navigate to:
-   ```
-   chrome://extensions
-   ```
-2. Turn **ON** the **Developer mode** toggle in the top-right corner.
-3. Click the **Load unpacked** button (top-left).
-4. Select the folder:
-   ```
-   C:\Users\Ganesh\.gemini\antigravity\scratch\amrita-feedback-automation
-   ```
-5. Ensure you have two tabs open in Chrome:
-   - **Tab 1:** `https://students.amrita.edu/client/class-feedback` (Logged in)
-   - **Tab 2:** `https://outlook.office.com/mail/` (Logged in to your college email)
-6. Refresh the Amrita portal tab. You will see a stylish **⚡ Amrita Feedback Auto** floating widget at the bottom right.
-7. Click **▶ Start Auto-Submit** and watch it do everything automatically!
+2. **Class TLP Feedback (`/client/class-feedback`)**:
+   - Automatically opens each pending course.
+   - Selects **Option 1** for all 15 questions and clicks **Save & Next**.
+   - On Step 16 (FINISH), triggers **SEND OTP**, reads OTP from Outlook, validates, and loops to the next course!
 
 ---
 
-### Method 2: Tampermonkey Userscript
+## 🚀 Installation Guide
 
-If you already use Tampermonkey:
-1. Open Tampermonkey Dashboard -> **Create a new script**.
-2. Copy and paste the contents of [`amrita_feedback.user.js`](./amrita_feedback.user.js).
-3. Save the script (`Ctrl + S`).
-4. Keep Outlook and Amrita open in Chrome, then click **Start Auto-Submit** on Amrita.
+### Option A: From Pre-built ZIP
+1. Download **`Amrita-Feedback-Automator-v2.0.0.zip`**.
+2. Right-click and choose **Extract All...** to a folder on your computer.
+3. Open Chrome and go to `chrome://extensions`.
+4. Turn **ON** the **Developer mode** toggle in the top-right corner.
+5. Click **Load unpacked** (top-left) and select the extracted folder.
+
+### Option B: From Source Directory
+1. Open Chrome and go to `chrome://extensions`.
+2. Turn **ON** **Developer mode**.
+3. Click **Load unpacked** and select:
+   ```
+   C:\Users\Ganesh\OneDrive\Desktop\Amrita-Feedback-Automation
+   ```
 
 ---
 
-## 🛠 Features & Safeguards
+## 📋 How to Use
 
-- **Multi-Course Auto-Loop:** Loops through all pending courses in your table until every single course is marked *Completed*.
-- **Smart Duplicate Prevention:** Keeps track of previous OTPs so it never re-submits an old code.
-- **Manual Override:** If Outlook is delayed, you can type the OTP into the floating widget and click *Submit OTP*.
-- **Real-time Status Log:** Displays live feedback progress (e.g., *Question 4/15: Selected option 1*, *Waiting for OTP...*, *Got OTP: K2tER*).
-- **Pause & Resume:** Pause anytime with ⏸ *Pause* and resume when ready.
+1. Ensure **two tabs** are open in the same Chrome window:
+   - **Tab 1:** `https://students.amrita.edu/client/course-feedback-list` (or `/client/class-feedback`)
+   - **Tab 2:** Your Amrita Outlook Web mail (`outlook.cloud.microsoft` or `outlook.office.com`)
+2. On the Amrita portal tab, you will see the floating **⚡ Amrita Feedback Auto** widget at the bottom right.
+3. Click **▶ Start Auto-Submit All**.
+4. Sit back and watch it complete and submit all courses automatically!
