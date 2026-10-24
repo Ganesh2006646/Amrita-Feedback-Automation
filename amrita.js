@@ -12,6 +12,8 @@
   let isRunning = localStorage.getItem("amrita_auto_running") === "true";
   let lastUsedOtp = localStorage.getItem("amrita_last_otp") || "";
   let originListPage = localStorage.getItem("amrita_origin_list") || "";
+  // Prevent duplicate completion checks from closing/navigating tabs twice.
+  let isReturningToList = false;
 
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -691,15 +693,17 @@
   }
 
   function closeAndRefreshPortal() {
-    stopAutomation();
-    // Keep auto-running flag active so the refreshed list continues with the next course
+    if (isReturningToList) return;
+    isReturningToList = true;
+
+    // Keep the run alive: the list-page content script resumes automatically after refresh.
     localStorage.setItem("amrita_auto_running", "true");
     isRunning = true;
 
     chrome.runtime.sendMessage(
       { action: "CLOSE_AND_REFRESH_PORTAL", origin: originListPage },
       (res) => {
-        if (chrome.runtime.lastError) {
+        if (chrome.runtime.lastError || !res || !res.success) {
           const listUrl = originListPage === "class-feedback"
             ? "https://students.amrita.edu/client/class-feedback"
             : "https://students.amrita.edu/client/course-feedback-list";
@@ -730,7 +734,10 @@
     widget.innerHTML = `
       <div class="aaw-header" tabindex="0" role="group" aria-label="Move feedback panel. Drag or use arrow keys; Shift moves faster.">
         <div class="aaw-brand"><span class="aaw-grip" aria-hidden="true">⠿</span><div><div class="aaw-title">Amrita Feedback</div><div class="aaw-subtitle">Drag to move</div></div></div>
-        <button type="button" class="aaw-btn-icon" id="aaw-min-btn" title="Minimize panel" aria-label="Minimize panel" aria-expanded="true">−</button>
+        <div class="aaw-header-actions">
+          <a class="aaw-btn-icon aaw-github-star" href="https://github.com/Ganesh2006646/Amrita-Feedback-Automation" target="_blank" rel="noopener noreferrer" title="Star on GitHub" aria-label="Star on GitHub (opens repository in a new tab)"><span aria-hidden="true">☆</span></a>
+          <button type="button" class="aaw-btn-icon" id="aaw-min-btn" title="Minimize panel" aria-label="Minimize panel" aria-expanded="true">−</button>
+        </div>
       </div>
       <div class="aaw-body">
         <div class="aaw-info-row">
@@ -750,7 +757,6 @@
             <button type="button" class="aaw-btn aaw-btn-check" id="aaw-submit-manual-otp-btn">Submit OTP</button>
           </div>
         </div>
-        <a class="aaw-btn aaw-btn-check aaw-github-star" href="https://github.com/Ganesh2006646/Amrita-Feedback-Automation" target="_blank" rel="noopener noreferrer" aria-label="Star on GitHub (opens repository in a new tab)"><span aria-hidden="true">☆</span> Star on GitHub</a>
         <div class="aaw-footer">Selects Option 1 and submits feedback automatically.</div>
       </div>
     `;

@@ -91,38 +91,59 @@ async function handleCloseAndRefresh(feedbackTabId, origin, sendResponse) {
       ? "https://students.amrita.edu/client/class-feedback"
       : "https://students.amrita.edu/client/course-feedback-list";
 
-    // 1. Find the portal list tab
-    let portalTab = tabs.find(t => {
-      if (t.id === feedbackTabId) return false;
-      if (!t.url) return false;
-      const url = t.url.toLowerCase();
+    const feedbackTab = tabs.find(t => t.id === feedbackTabId);
+    const isStudentPortalTab = tab => {
+      try {
+        return Boolean(tab && tab.id !== feedbackTabId && tab.url &&
+          new URL(tab.url).hostname === "students.amrita.edu");
+      } catch (_) {
+        return false;
+      }
+    };
+    const isTargetListTab = tab => {
+      if (!isStudentPortalTab(tab)) return false;
+      try {
+        const url = new URL(tab.url);
+        if (url.hostname !== "students.amrita.edu") return false;
+        if (listPattern === "class-feedback") {
+          // Forms can also use /class-feedback, but always carry form identifiers.
+          return url.pathname.includes("/client/class-feedback") &&
+            !url.searchParams.has("cid") && !url.searchParams.has("fid");
+        }
+        return url.pathname.includes("/client/course-feedback-list");
+      } catch (_) {
+        return false;
+      }
+    };
 
-      if (listPattern && url.includes(listPattern)) return true;
-      return url.includes("course-feedback-list") || url.includes("class-feedback") || url.includes("feedback-list");
-    });
-
-    // Fallback: any other student portal tab
-    if (!portalTab) {
-      portalTab = tabs.find(t => t.id !== feedbackTabId && t.url && t.url.toLowerCase().includes("students.amrita.edu"));
+    // Prefer the tab that opened the feedback form, then an already-open matching list.
+    let portalTab = feedbackTab && typeof feedbackTab.openerTabId === "number"
+      ? tabs.find(t => t.id === feedbackTab.openerTabId && isTargetListTab(t))
+      : null;
+    if (!portalTab) portalTab = tabs.find(isTargetListTab);
+    // A list tab may have navigated elsewhere while the form was open. It is still
+    // the best place to return before navigating it back to the feedback list.
+    if (!portalTab && feedbackTab && typeof feedbackTab.openerTabId === "number") {
+      portalTab = tabs.find(t => t.id === feedbackTab.openerTabId && isStudentPortalTab(t));
     }
+    if (!portalTab) portalTab = tabs.find(isStudentPortalTab);
 
     if (portalTab && feedbackTabId) {
-      console.log("[Amrita BG] Switching to portal tab", portalTab.id, "and closing tab", feedbackTabId);
-      await chrome.tabs.update(portalTab.id, { active: true });
-
-      // Refresh list page or navigate to it
-      const currentUrl = (portalTab.url || "").toLowerCase();
-      if (currentUrl.includes("course-feedback-list") || currentUrl.includes("class-feedback")) {
-        await chrome.tabs.reload(portalTab.id);
-      } else {
-        await chrome.tabs.update(portalTab.id, { url: targetUrl });
-      }
-
-      await new Promise(r => setTimeout(r, 800));
+      console.log("[Amrita BG] Closing feedback tab", feedbackTabId, "and returning to list tab", portalTab.id);
       try {
         await chrome.tabs.remove(feedbackTabId);
       } catch (e) {
         console.warn("[Amrita BG] Could not close feedback tab:", e.message);
+      }
+
+      await chrome.tabs.update(portalTab.id, { active: true });
+      // Allow the submission response to settle before fetching the updated pending list.
+      await new Promise(r => setTimeout(r, 800));
+      const currentUrl = (portalTab.url || "").toLowerCase();
+      if (isTargetListTab(portalTab) && currentUrl.startsWith(targetUrl)) {
+        await chrome.tabs.reload(portalTab.id);
+      } else {
+        await chrome.tabs.update(portalTab.id, { url: targetUrl });
       }
     } else if (feedbackTabId) {
       // Single-tab mode: navigate directly to list page
