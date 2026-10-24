@@ -1,4 +1,4 @@
-# Amrita Feedback Automator
+# AutoFeed - Amrita Feedback
 
 **Two feedback flows. One Chrome extension.**
 
@@ -50,12 +50,14 @@ The existing class flow targets 15 questions followed by the final OTP step. Por
 
 ## Install the Chrome extension
 
-1. Extract this project if downloaded as a ZIP.
+1. Extract this project if downloaded as a ZIP. The folder you select must directly contain `manifest.json`.
 2. Open `chrome://extensions` in Chrome.
 3. Enable **Developer mode**.
 4. Click **Load unpacked**.
-5. Select the folder containing `manifest.json`, `amrita.js`, `background.js`, `outlook.js`, and `widget.css` — not an outer folder that only contains another copy of the project folder.
+5. Select `Amrita-Feedback-Automation` itself, containing `manifest.json`, `amrita.js`, `background.js`, `outlook.js`, `widget.css`, and the `icons` folder. Do not select an outer folder, a ZIP file, or an individual file.
 6. Refresh any Amrita and Outlook tabs already open.
+
+If Chrome reports **“File path cannot be resolved”** or **“Could not load manifest”**, cancel the dialog and select the folder that shows `manifest.json` immediately inside it. The manifest is not inside a second nested project folder.
 
 No Python installation is needed for the extension.
 
