@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "Amrita Feedback Automator",
+  "version": "2.0.0",
+  "description": "Automatically answers all questions with Option 1 for both Class TLP and Course Feedback, reads OTP from Outlook, and submits all courses.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "*://students.amrita.edu/*",
+    "*://*.cloud.microsoft/*",
+    "*://*.office.com/*",
+    "*://*.office365.com/*",
+    "*://*.outlook.com/*",
+    "*://*.live.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://students.amrita.edu/*"],
+      "js": ["amrita.js"],
+      "css": ["widget.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://*.cloud.microsoft/*",
+        "*://*.office.com/*",
+        "*://*.office365.com/*",
+        "*://*.outlook.com/*",
+        "*://*.live.com/*"
+      ],
+      "js": ["outlook.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Amrita Feedback Automator"
+  }
+}
