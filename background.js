@@ -2,6 +2,21 @@
 
 console.log("[Amrita BG] Service worker initialized.");
 
+// ──────────────────────────────────────────────
+// Extension icon click → reopen widget on active tab
+// ──────────────────────────────────────────────
+chrome.action.onClicked.addListener(async (tab) => {
+  if (!tab || !tab.id) return;
+  try {
+    await chrome.tabs.sendMessage(tab.id, { action: "REOPEN_WIDGET" });
+  } catch (_) {
+    // Tab may not have the content script yet (e.g. non-Amrita page) — ignore.
+  }
+});
+
+// ──────────────────────────────────────────────
+// Message router
+// ──────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "FETCH_OTP") {
     handleFetchOtp(message.lastOtp, sendResponse);
@@ -18,7 +33,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// ──────────────────────────────────────────────
 // Find the Outlook tab
+// ──────────────────────────────────────────────
 async function findOutlookTab() {
   const tabs = await chrome.tabs.query({});
   return tabs.find(t => {
@@ -34,6 +51,9 @@ async function findOutlookTab() {
   });
 }
 
+// ──────────────────────────────────────────────
+// Fetch OTP from Outlook tab
+// ──────────────────────────────────────────────
 async function handleFetchOtp(lastOtp, sendResponse) {
   try {
     const outlookTab = await findOutlookTab();
@@ -82,6 +102,9 @@ async function handleFetchOtp(lastOtp, sendResponse) {
   }
 }
 
+// ──────────────────────────────────────────────
+// Close feedback tab and refresh the list portal tab
+// ──────────────────────────────────────────────
 async function handleCloseAndRefresh(feedbackTabId, origin, sendResponse) {
   try {
     const tabs = await chrome.tabs.query({});
@@ -92,6 +115,7 @@ async function handleCloseAndRefresh(feedbackTabId, origin, sendResponse) {
       : "https://students.amrita.edu/client/course-feedback-list";
 
     const feedbackTab = tabs.find(t => t.id === feedbackTabId);
+
     const isStudentPortalTab = tab => {
       try {
         return Boolean(tab && tab.id !== feedbackTabId && tab.url &&
@@ -100,13 +124,13 @@ async function handleCloseAndRefresh(feedbackTabId, origin, sendResponse) {
         return false;
       }
     };
+
     const isTargetListTab = tab => {
       if (!isStudentPortalTab(tab)) return false;
       try {
         const url = new URL(tab.url);
         if (url.hostname !== "students.amrita.edu") return false;
         if (listPattern === "class-feedback") {
-          // Forms can also use /class-feedback, but always carry form identifiers.
           return url.pathname.includes("/client/class-feedback") &&
             !url.searchParams.has("cid") && !url.searchParams.has("fid");
         }
@@ -116,35 +140,47 @@ async function handleCloseAndRefresh(feedbackTabId, origin, sendResponse) {
       }
     };
 
-    // Prefer the tab that opened the feedback form, then an already-open matching list.
+    // Find the best portal tab to return to
     let portalTab = feedbackTab && typeof feedbackTab.openerTabId === "number"
       ? tabs.find(t => t.id === feedbackTab.openerTabId && isTargetListTab(t))
       : null;
     if (!portalTab) portalTab = tabs.find(isTargetListTab);
-    // A list tab may have navigated elsewhere while the form was open. It is still
-    // the best place to return before navigating it back to the feedback list.
     if (!portalTab && feedbackTab && typeof feedbackTab.openerTabId === "number") {
       portalTab = tabs.find(t => t.id === feedbackTab.openerTabId && isStudentPortalTab(t));
     }
     if (!portalTab) portalTab = tabs.find(isStudentPortalTab);
 
     if (portalTab && feedbackTabId) {
-      console.log("[Amrita BG] Closing feedback tab", feedbackTabId, "and returning to list tab", portalTab.id);
+      console.log("[Amrita BG] Closing feedback tab", feedbackTabId, "→ list tab", portalTab.id);
+
+      // Close feedback tab
       try {
         await chrome.tabs.remove(feedbackTabId);
       } catch (e) {
         console.warn("[Amrita BG] Could not close feedback tab:", e.message);
       }
 
+      // Focus the portal/list tab
       await chrome.tabs.update(portalTab.id, { active: true });
-      // Allow the submission response to settle before fetching the updated pending list.
-      await new Promise(r => setTimeout(r, 800));
-      const currentUrl = (portalTab.url || "").toLowerCase();
-      if (isTargetListTab(portalTab) && currentUrl.startsWith(targetUrl)) {
-        await chrome.tabs.reload(portalTab.id);
+
+      // Wait longer for submission response to settle, then get FRESH tab data
+      await new Promise(r => setTimeout(r, 1500));
+
+      let freshTab;
+      try {
+        freshTab = await chrome.tabs.get(portalTab.id);
+      } catch (e) {
+        freshTab = portalTab;
+      }
+
+      // Always navigate/reload to the list page (don't trust stale URL comparison)
+      const freshUrl = (freshTab.url || "").toLowerCase();
+      if (freshUrl.startsWith(targetUrl.toLowerCase())) {
+        await chrome.tabs.reload(portalTab.id, { bypassCache: true });
       } else {
         await chrome.tabs.update(portalTab.id, { url: targetUrl });
       }
+
     } else if (feedbackTabId) {
       // Single-tab mode: navigate directly to list page
       console.log("[Amrita BG] Single tab mode → navigating to", targetUrl);

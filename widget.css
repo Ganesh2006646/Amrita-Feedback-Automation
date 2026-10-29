@@ -58,6 +58,8 @@
 #amrita-automator-widget .aaw-github-star { color: #982649; border-color: #e8c4d0; background: #faf0f4; }
 #amrita-automator-widget .aaw-github-star span { font-size: 20px; line-height: 1; }
 #amrita-automator-widget .aaw-github-star:hover { background: #f5e1e9; }
+#amrita-automator-widget .aaw-close-btn { color: #637085; font-size: 18px; }
+#amrita-automator-widget .aaw-close-btn:hover { background: #fde8ec; color: #982649; border-color: #e8c4d0; }
 #amrita-automator-widget .aaw-body { display: flex; flex-direction: column; gap: 14px; padding: 16px; overflow-y: auto; min-height: 0; }
 #amrita-automator-widget .aaw-info-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #637085; }
 #amrita-automator-widget .aaw-status-badge { padding: 3px 9px; border-radius: 5px; font-size: 11px; font-weight: 600; }
