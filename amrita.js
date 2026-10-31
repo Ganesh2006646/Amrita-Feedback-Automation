@@ -5,8 +5,7 @@
   "use strict";
 
   // ══════════════════════════════════════════════════════════
-  // GUARD: Only one instance per page load. On SPA navigation
-  // the guard is cleared so the script re-initialises.
+  // GUARD: one instance per document lifetime
   // ══════════════════════════════════════════════════════════
   if (window.__amrita_automator_running) return;
   window.__amrita_automator_running = true;
@@ -16,11 +15,13 @@
   // ──────────────────────────────────────────────
   // STATE
   // ──────────────────────────────────────────────
-  let isRunning = localStorage.getItem("amrita_auto_running") === "true";
-  let lastUsedOtp = localStorage.getItem("amrita_last_otp") || "";
-  let originListPage = localStorage.getItem("amrita_origin_list") || "";
-  // Prevent double close/navigate per course cycle.
+  let isRunning        = localStorage.getItem("amrita_auto_running") === "true";
+  let lastUsedOtp      = localStorage.getItem("amrita_last_otp") || "";
+  let originListPage   = localStorage.getItem("amrita_origin_list") || "";
   let isReturningToList = false;
+
+  // ★ Step lock — prevents two async flows running at the same time
+  let isStepRunning = false;
 
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -35,7 +36,6 @@
 
     if (path.includes("course-feedback-list")) return "LIST_PAGE";
     if (path.includes("class-feedback") && !href.includes("cid=") && !href.includes("fid=")) return "LIST_PAGE";
-
     if (path.includes("feedback") || href.includes("cid=") || href.includes("fid=")) return "FORM_PAGE";
 
     return "UNKNOWN";
@@ -61,15 +61,14 @@
   if (isRunning && pageType !== "UNKNOWN") {
     updateBadge("RUNNING", "running");
     log("Auto-resuming feedback automation...");
-    setTimeout(() => runNextStep(), 1200);
+    setTimeout(() => runNextStep(), 1500);
   }
 
   // ══════════════════════════════════════════════════════════
-  // REOPEN WIDGET on extension icon click (background sends this)
+  // REOPEN WIDGET on extension icon click
   // ══════════════════════════════════════════════════════════
   chrome.runtime.onMessage.addListener((message) => {
     if (message.action === "REOPEN_WIDGET") {
-      // If widget was removed from DOM, recreate it
       if (!document.getElementById("amrita-automator-widget")) {
         createWidget();
         log("Widget reopened. Click 'Start' to begin.");
@@ -78,46 +77,56 @@
   });
 
   // ══════════════════════════════════════════════════════════
-  // SPA NAVIGATION WATCHER
-  // Amrita portal uses Angular/SPA routing — re-init on URL change
+  // SPA NAVIGATION WATCHER — debounced, respects step lock
   // ══════════════════════════════════════════════════════════
   let _lastHref = window.location.href;
+  let _spaDebounceTimer = null;
+
+  // ★ Debounced callback — fires at most once per 600 ms
   const _spaObserver = new MutationObserver(() => {
-    if (window.location.href !== _lastHref) {
+    if (window.location.href === _lastHref) return; // URL unchanged — ignore
+    clearTimeout(_spaDebounceTimer);
+    _spaDebounceTimer = setTimeout(() => {
+      if (window.location.href === _lastHref) return;
       _lastHref = window.location.href;
       onSpaNavigate();
-    }
+    }, 600);
   });
-  _spaObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+  _spaObserver.observe(document.documentElement, { childList: true, subtree: true });
 
-  window.addEventListener("popstate", onSpaNavigate);
+  window.addEventListener("popstate",   onSpaNavigate);
   window.addEventListener("hashchange", onSpaNavigate);
 
   function onSpaNavigate() {
-    console.log("[Amrita] SPA navigation detected →", window.location.href);
-    // Allow a brief moment for the new page DOM to render
+    // ★ Don't start a new step if one is already running
+    if (isStepRunning) {
+      console.log("[Amrita] SPA nav detected but step is running — skipping re-trigger");
+      return;
+    }
+
+    console.log("[Amrita] SPA navigation →", window.location.href);
+
     setTimeout(() => {
       // Re-track origin
       const p = window.location.pathname.toLowerCase();
+      const h = window.location.href.toLowerCase();
       if (p.includes("course-feedback-list")) {
         originListPage = "course-feedback-list";
         localStorage.setItem("amrita_origin_list", "course-feedback-list");
-      } else if (p.includes("class-feedback") && !window.location.href.toLowerCase().includes("cid=") && !window.location.href.toLowerCase().includes("fid=")) {
+      } else if (p.includes("class-feedback") && !h.includes("cid=") && !h.includes("fid=")) {
         originListPage = "class-feedback";
         localStorage.setItem("amrita_origin_list", "class-feedback");
       }
-      // Recreate widget if it was removed
-      if (!document.getElementById("amrita-automator-widget")) {
-        createWidget();
-      }
-      // Resume if running
-      if (isRunning && getPageType() !== "UNKNOWN") {
+
+      if (!document.getElementById("amrita-automator-widget")) createWidget();
+
+      if (isRunning && !isStepRunning && getPageType() !== "UNKNOWN") {
         isReturningToList = false;
         updateBadge("RUNNING", "running");
         log("Resuming after navigation...");
         runNextStep();
       }
-    }, 1000);
+    }, 1200);
   }
 
   // ══════════════════════════════════════════════════════════
@@ -125,17 +134,27 @@
   // ══════════════════════════════════════════════════════════
   async function runNextStep() {
     if (!isRunning) return;
-    isReturningToList = false; // Reset guard at start of every cycle step
+    if (isStepRunning) { // ★ Prevent concurrent execution
+      console.log("[Amrita] runNextStep skipped — already running");
+      return;
+    }
 
-    const pt = getPageType();
-    if (pt === "LIST_PAGE") {
-      await handleListPage();
-    } else if (pt === "FORM_PAGE") {
-      await handleFeedbackForm();
-    } else {
-      log("Navigate to Course Feedback or Class Feedback to begin.");
-      updateBadge("IDLE", "idle");
-      stopAutomation();
+    isStepRunning = true;
+    isReturningToList = false;
+
+    try {
+      const pt = getPageType();
+      if (pt === "LIST_PAGE") {
+        await handleListPage();
+      } else if (pt === "FORM_PAGE") {
+        await handleFeedbackForm();
+      } else {
+        log("Navigate to Course Feedback or Class Feedback to begin.");
+        updateBadge("IDLE", "idle");
+        stopAutomation();
+      }
+    } finally {
+      isStepRunning = false;
     }
   }
 
@@ -171,7 +190,7 @@
         if (submitBtn) break;
       }
 
-      // Broad search if not found in table
+      // Broad search if not in table
       if (!submitBtn) {
         const allBtns = document.querySelectorAll("button, a, input[type='button'], input[type='submit']");
         for (const b of allBtns) {
@@ -188,50 +207,59 @@
       await sleep(500);
     }
 
-    if (submitBtn) {
-      log(`Found pending course: "${courseName.slice(0, 35)}". Opening...`);
-      updateBadge("OPENING", "running");
-      await sleep(400);
-
-      // Record URL before click to detect navigation or popup
-      const urlBefore = window.location.href;
-      submitBtn.click();
-
-      // Wait up to 5 s for navigation to happen
-      let navigated = false;
-      for (let w = 0; w < 20; w++) {
-        await sleep(250);
-        if (window.location.href !== urlBefore) { navigated = true; break; }
-      }
-
-      if (!navigated) {
-        // SPA may have loaded the form in-place — try checking page type
-        await sleep(500);
-        if (getPageType() === "FORM_PAGE") {
-          isReturningToList = false;
-          await handleFeedbackForm();
-        } else {
-          log("⚠ Page did not navigate after button click. Retrying...");
-          await sleep(1500);
-          if (isRunning) handleListPage();
-        }
-      }
-      // If navigated, the content script re-runs (full reload) or onSpaNavigate fires (SPA)
-    } else {
+    if (!submitBtn) {
       log("🎉 All courses completed! Great job!");
       updateBadge("ALL DONE", "completed");
       stopAutomation();
+      return;
+    }
+
+    log(`Found pending course: "${courseName.slice(0, 35)}". Opening...`);
+    updateBadge("OPENING", "running");
+    await sleep(600);
+
+    const urlBefore = window.location.href;
+
+    // ★ Set lock BEFORE clicking so onSpaNavigate won't double-trigger
+    isStepRunning = true;
+    submitBtn.click();
+
+    // Wait up to 6 s for SPA or full navigation
+    let navigated = false;
+    for (let w = 0; w < 24; w++) {
+      await sleep(250);
+      if (window.location.href !== urlBefore) { navigated = true; break; }
+    }
+
+    if (navigated) {
+      // Update href tracker so debounced observer doesn't re-fire
+      _lastHref = window.location.href;
+      // Let page render, then handle the form
+      await sleep(1200);
+      isStepRunning = false;
+      if (isRunning) await handleFeedbackForm();
+    } else {
+      // No URL change — might still be a form loaded inside same URL
+      await sleep(600);
+      isStepRunning = false;
+      if (getPageType() === "FORM_PAGE") {
+        if (isRunning) await handleFeedbackForm();
+      } else {
+        log("⚠ No navigation detected. Retrying scan...");
+        await sleep(1500);
+        if (isRunning) await handleListPage();
+      }
     }
   }
 
   // ══════════════════════════════════════════════════════════
   // 2. FORM PAGE: UNIFIED HANDLER
-  //    Priority: OTP screen → Finish screen → Questions
+  //    Priority: OTP → Finish → Answer questions → Next
   // ══════════════════════════════════════════════════════════
   async function handleFeedbackForm() {
     if (!isRunning) return;
 
-    // OTP takes priority always
+    // OTP takes priority
     if (isOnOtpScreen()) {
       await handleOtpFlow();
       return;
@@ -242,29 +270,13 @@
       return;
     }
 
-    // Answer questions
     updateBadge("ANSWERING", "running");
 
+    // ★ Step 1: Select option FIRST — DO NOT click the radio itself (causes race)
     const selected = selectFirstOption();
-    if (selected) {
-      const stepNum = getCurrentStepNumber();
-      log(`Question ${stepNum}: Selected Option 1 ✓`);
-      await sleep(500);
 
-      const nextBtn = findSubmitNextButton();
-      if (nextBtn) {
-        const btnText = (nextBtn.textContent || nextBtn.value || "").trim();
-        log(`Clicking '${btnText}'...`);
-        await sleep(200);
-        nextBtn.click();
-        // Page will reload or SPA will advance — both handled
-      } else {
-        log("⚠ Next/Submit button not found, retrying...");
-        await sleep(1500);
-        if (isRunning) handleFeedbackForm();
-      }
-    } else {
-      // No radio options — check for other screens
+    if (!selected) {
+      // No radio options visible — check for other states
       await sleep(800);
       if (isOnOtpScreen()) {
         await handleOtpFlow();
@@ -273,6 +285,28 @@
       } else {
         checkIfDone();
       }
+      return;
+    }
+
+    const stepNum = getCurrentStepNumber();
+    log(`Question ${stepNum}: Selected Option 1 ✓`);
+
+    // ★ Step 2: Wait a moment for the UI to register the selection
+    await sleep(600);
+
+    // ★ Step 3: THEN find and click the next/save button
+    const nextBtn = findSubmitNextButton();
+    if (nextBtn) {
+      const btnText = (nextBtn.textContent || nextBtn.value || "").trim();
+      log(`Clicking '${btnText}'...`);
+      await sleep(300);
+      nextBtn.click();
+      // After click, SPA will advance — wait before next iteration
+      await sleep(800);
+    } else {
+      log("⚠ Next/Submit button not found, retrying...");
+      await sleep(1500);
+      if (isRunning) await handleFeedbackForm();
     }
   }
 
@@ -287,7 +321,7 @@
     if (!finishBtn) {
       log("⚠ Finish button not found, retrying...");
       await sleep(1500);
-      if (isRunning) handleFeedbackForm();
+      if (isRunning) await handleFeedbackForm();
       return;
     }
 
@@ -295,16 +329,16 @@
     log("Clicking 'Finish' button...");
     finishBtn.click();
 
-    log("Waiting for confirmation dialog (OK)...");
+    log("Waiting for confirmation dialog...");
     await waitForAndClickDialogOk(6000);
 
     dismissPopups();
     await sleep(1000);
     dismissPopups();
 
-    log("✅ Feedback completed! Closing tab and refreshing portal...");
+    log("✅ Feedback completed! Closing tab...");
     updateBadge("DONE", "completed");
-    await sleep(1000);
+    await sleep(800);
 
     closeAndRefreshPortal();
   }
@@ -339,14 +373,8 @@
         log(`Clicking dialog '${label}'...`);
         okBtn.click();
         await sleep(800);
-
-        // Secondary popup (e.g. "Feedback recorded successfully")
         const secondary = findDialogOkButton();
-        if (secondary) {
-          log("Clicking secondary dialog OK...");
-          secondary.click();
-          await sleep(600);
-        }
+        if (secondary) { secondary.click(); await sleep(600); }
         return true;
       }
       await sleep(200);
@@ -355,22 +383,16 @@
   }
 
   function findDialogOkButton() {
-    // 1. SweetAlert & Bootbox
     const selectors = [
-      ".swal2-confirm",
-      ".swal2-actions button",
-      ".swal-button--confirm",
-      ".swal-button",
-      ".bootbox-accept",
-      "[data-bb-handler='confirm']",
-      "[data-bb-handler='ok']"
+      ".swal2-confirm", ".swal2-actions button",
+      ".swal-button--confirm", ".swal-button",
+      ".bootbox-accept", "[data-bb-handler='confirm']", "[data-bb-handler='ok']"
     ];
     for (const sel of selectors) {
       const b = document.querySelector(sel);
       if (b && !b.closest("#amrita-automator-widget") && isVisible(b)) return b;
     }
 
-    // 2. Buttons inside visible modals/dialogs
     const modals = document.querySelectorAll(
       ".modal.show, .modal[style*='display: block'], [role='dialog'], .swal2-container, .bootbox, .popup, .dialog"
     );
@@ -386,7 +408,6 @@
       if (primary && isVisible(primary)) return primary;
     }
 
-    // 3. Any visible "OK" / "Yes" button anywhere on page
     const allBtns = document.querySelectorAll("button, a, input[type='button'], input[type='submit']");
     for (const b of allBtns) {
       if (b.closest("#amrita-automator-widget")) continue;
@@ -394,7 +415,6 @@
       const txt = (b.textContent || b.value || "").trim().toLowerCase();
       if (txt === "ok" || txt === "yes") return b;
     }
-
     return null;
   }
 
@@ -404,7 +424,6 @@
   async function handleOtpFlow() {
     updateBadge("OTP FLOW", "waiting");
 
-    // Click SEND OTP if present
     const sendBtn = findButtonByText(/send\s*otp/i);
     if (sendBtn && isVisible(sendBtn)) {
       log("Clicking 'SEND OTP' button...");
@@ -412,7 +431,6 @@
       await sleep(3000);
     }
 
-    // Wait for OTP input to appear
     let otpInput = findOtpInput();
     if (!otpInput) { await sleep(2000); otpInput = findOtpInput(); }
     if (!otpInput) { await sleep(1500); otpInput = findOtpInput(); }
@@ -449,12 +467,9 @@
 
   async function enterAndValidateOtp(otp) {
     const input = findOtpInput();
-    if (!input) {
-      log("❌ OTP input field not found!");
-      return;
-    }
+    if (!input) { log("❌ OTP input field not found!"); return; }
 
-    // Use native setter to bypass React/Angular input interception
+    // Use native value setter to bypass React/Angular
     const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
     if (nativeSetter && nativeSetter.set) {
       nativeSetter.set.call(input, otp);
@@ -479,7 +494,6 @@
       dismissPopups();
       await sleep(1000);
 
-      // Check if OTP screen is still showing (rejected / pending)
       if (isOnOtpScreen()) {
         log("⚠ OTP still pending. Check portal and retry OTP manually.");
         updateBadge("CHECK OTP", "waiting");
@@ -491,7 +505,6 @@
         return;
       }
 
-      // Questions appeared after OTP (Course Feedback flow)
       const hasQuestions = Array.from(document.querySelectorAll(
         "input[name='option_id'], input[type='radio'], label.form-check-label"
       )).some(el => !el.closest("#amrita-automator-widget") && isVisible(el));
@@ -499,18 +512,16 @@
       if (hasQuestions) {
         log("OTP verified! Answering questions...");
         await sleep(500);
-        handleFeedbackForm();
+        await handleFeedbackForm();
         return;
       }
 
-      // Course feedback: if no questions appeared, something went wrong
       if (originListPage === "course-feedback-list" || window.location.pathname.includes("course-feedback")) {
-        log("⚠ Waiting for course questions after OTP. Check portal.");
+        log("⚠ Waiting for course questions after OTP.");
         updateBadge("CHECK FORM", "waiting");
         return;
       }
 
-      // Class TLP: OTP is the last step
       log("✅ Verified! Closing tab and refreshing portal...");
       await sleep(800);
       closeAndRefreshPortal();
@@ -525,25 +536,21 @@
   // ══════════════════════════════════════════════════════════
 
   function isOnOtpScreen() {
-    // Class TLP step 16
     const activeStep = document.querySelector(".step-item.active");
     if (activeStep && activeStep.getAttribute("data-step") === "16") return true;
 
-    // SEND OTP button visible
     const sendOtpBtn = findButtonByText(/send\s*otp/i);
     if (sendOtpBtn && isVisible(sendOtpBtn)) return true;
 
-    // Validate button + OTP input both visible
     const validateBtn = findButtonByText(/validate/i);
     const otpInput = findOtpInput();
     if (validateBtn && isVisible(validateBtn) && otpInput && isVisible(otpInput)) return true;
 
-    // Verification text with no radio buttons
     const bodyText = document.body ? (document.body.innerText || "") : "";
     if (/verify\s*OTP|OTP\s*which\s*will\s*be\s*sending/i.test(bodyText)) {
-      const radios = Array.from(document.querySelectorAll("input[name='option_id'], input[type='radio']"))
+      const visibleRadios = Array.from(document.querySelectorAll("input[name='option_id'], input[type='radio']"))
         .filter(el => !el.closest("#amrita-automator-widget") && isVisible(el));
-      if (radios.length === 0) return true;
+      if (visibleRadios.length === 0) return true;
     }
 
     return false;
@@ -559,27 +566,31 @@
 
   /**
    * Select the first answer option.
-   * Uses native checked setter to bypass React/Angular synthetic events.
+   * ★ KEY FIX: Does NOT call .click() on the radio input itself —
+   *   that would trigger portal click-handlers which may advance the
+   *   page before we explicitly click Next.
+   *   Instead: set checked via native setter + dispatch events + click label only.
    */
   function selectFirstOption() {
-    const nativeCheckedSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked");
+    const nativeChecked = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked");
 
     // 1. Named radios (option_id)
     const namedRadios = Array.from(document.querySelectorAll("input[name='option_id']"))
       .filter(el => !el.closest("#amrita-automator-widget") && isVisible(el));
     if (namedRadios.length > 0) {
       const first = namedRadios[0];
-      if (nativeCheckedSetter && nativeCheckedSetter.set) {
-        nativeCheckedSetter.set.call(first, true);
-      }
+      if (nativeChecked && nativeChecked.set) nativeChecked.set.call(first, true);
       first.checked = true;
-      first.click();
+      first.dispatchEvent(new Event("input",  { bubbles: true }));
       first.dispatchEvent(new Event("change", { bubbles: true }));
-      // Also click associated label
+      // Click the label (safe — doesn't submit the form)
       if (first.id) {
         const lbl = document.querySelector(`label[for='${first.id}']`);
-        if (lbl) lbl.click();
+        if (lbl) { lbl.click(); return true; }
       }
+      const fallbackLabel = first.closest("label") ||
+        first.parentElement && first.parentElement.querySelector("label");
+      if (fallbackLabel) { fallbackLabel.click(); return true; }
       return true;
     }
 
@@ -588,16 +599,17 @@
       .filter(el => !el.closest("#amrita-automator-widget") && isVisible(el));
     if (allRadios.length > 0) {
       const first = allRadios[0];
-      if (nativeCheckedSetter && nativeCheckedSetter.set) {
-        nativeCheckedSetter.set.call(first, true);
-      }
+      if (nativeChecked && nativeChecked.set) nativeChecked.set.call(first, true);
       first.checked = true;
-      first.click();
+      first.dispatchEvent(new Event("input",  { bubbles: true }));
       first.dispatchEvent(new Event("change", { bubbles: true }));
       if (first.id) {
         const lbl = document.querySelector(`label[for='${first.id}']`);
-        if (lbl) lbl.click();
+        if (lbl) { lbl.click(); return true; }
       }
+      const fallbackLabel = first.closest("label") ||
+        (first.parentElement && first.parentElement.querySelector("label"));
+      if (fallbackLabel) { fallbackLabel.click(); return true; }
       return true;
     }
 
@@ -614,49 +626,55 @@
   }
 
   /**
-   * Find the correct "proceed" button with strict priority order.
-   * Priority: submit_ans (TLP) → Save & Next → Next → Submit (non-feedback/non-finish)
+   * Find the correct "proceed" button — strict priority:
+   * 1. [name=submit_ans]  — TLP "Save & Next"
+   * 2. "Save & Next" text
+   * 3. "Next" text / .next-btn class
+   * 4. "Submit" (excluding feedback/OTP/validate/finish words)
    */
   function findSubmitNextButton() {
     const allClickables = document.querySelectorAll(
       "button, a, input[type='submit'], input[type='button'], .btn"
     );
 
-    let saveAndNextBtn = null;
-    let nextBtn       = null;
-    let submitBtn     = null;
+    let nextBtn   = null;
+    let submitBtn = null;
 
     for (const b of allClickables) {
       if (b.closest("#amrita-automator-widget")) continue;
       if (!isVisible(b)) continue;
 
-      const text = (b.textContent || b.value || "").trim();
+      const text  = (b.textContent || b.value || "").trim();
       const textL = text.toLowerCase();
-      const name = (b.getAttribute("name") || "").toLowerCase();
+      const name  = (b.getAttribute("name") || "").toLowerCase();
 
-      // Skip back/cancel/close/resend/finish buttons
-      if (/\b(back|prev|cancel|close|resend|finish)\b/i.test(textL)) continue;
+      // Skip navigation buttons
+      if (/\b(back|prev|cancel|close|resend|finish|send\s*otp)\b/i.test(textL)) continue;
 
-      // #1 Highest priority: TLP's submit_ans button (Save & Next)
+      // #1 TLP Save & Next (by name attribute)
       if (name === "submit_ans") return b;
 
-      // #2 "Save & Next" text
+      // #2 Save & Next (by text)
       if (/save\s*[&]\s*next/i.test(text)) return b;
 
-      // #3 "Next" button
+      // #3 Next button
       if (/^next$/i.test(text) || b.classList.contains("next-btn")) {
         if (!nextBtn) nextBtn = b;
         continue;
       }
 
-      // #4 Generic "Submit" (not for feedback list, not OTP validate)
-      if (/\bsubmit\b/i.test(textL) && !/feedback/i.test(textL) && !/otp/i.test(textL) && !/validate/i.test(textL)) {
+      // #4 Generic Submit (not feedback-list, not OTP, not validate)
+      if (/\bsubmit\b/i.test(textL) &&
+          !/feedback/i.test(textL) &&
+          !/otp/i.test(textL) &&
+          !/validate/i.test(textL) &&
+          !/finish/i.test(textL)) {
         if (!submitBtn) submitBtn = b;
         continue;
       }
     }
 
-    return saveAndNextBtn || nextBtn || submitBtn || null;
+    return nextBtn || submitBtn || null;
   }
 
   function findButtonByText(regex) {
@@ -670,7 +688,6 @@
   }
 
   function findOtpInput() {
-    // By placeholder
     const byPlaceholder = document.querySelector(
       "input[placeholder*='OTP' i], input[placeholder*='Email OTP' i], input[placeholder*='otp' i]"
     );
@@ -678,23 +695,17 @@
       return byPlaceholder;
     }
 
-    // By context text
     const allInputs = document.querySelectorAll("input[type='text'], input:not([type])");
     for (const inp of allInputs) {
       if (inp.closest("#amrita-automator-widget")) continue;
       if (inp.id === "aaw-manual-otp-input") continue;
       if (!isVisible(inp)) continue;
-      if (inp.type === "radio" || inp.type === "checkbox" || inp.type === "hidden" ||
-          inp.type === "submit" || inp.type === "button") continue;
-
+      if (["radio","checkbox","hidden","submit","button"].includes(inp.type)) continue;
       const parent = inp.closest("div, form, section");
-      if (parent) {
-        const pText = parent.innerText || "";
-        if (/otp|verification/i.test(pText)) return inp;
-      }
+      if (parent && /otp|verification/i.test(parent.innerText || "")) return inp;
     }
 
-    // Any visible non-search text input
+    // Fallback: first visible non-search text input
     for (const inp of allInputs) {
       if (inp.closest("#amrita-automator-widget")) continue;
       if (inp.id === "aaw-manual-otp-input") continue;
@@ -702,7 +713,6 @@
       if (/search|email|name|phone|mobile/i.test(inp.placeholder || inp.name || "")) continue;
       return inp;
     }
-
     return null;
   }
 
@@ -726,7 +736,6 @@
 
   function checkIfDone() {
     if (isFinishScreen()) { handleFinishStep(); return; }
-
     const text = (document.body.innerText || "").toLowerCase();
     if (text.includes("thank you") || text.includes("submitted successfully") ||
         text.includes("feedback has been submitted") || text.includes("can not update feedback")) {
@@ -735,7 +744,7 @@
       if (finishBtn) { handleFinishStep(); } else { closeAndRefreshPortal(); }
     } else {
       log("Waiting for page content...");
-      setTimeout(() => { if (isRunning) handleFeedbackForm(); }, 1500);
+      setTimeout(() => { if (isRunning && !isStepRunning) handleFeedbackForm(); }, 1500);
     }
   }
 
@@ -743,7 +752,6 @@
     if (isReturningToList) return;
     isReturningToList = true;
 
-    // Keep automation alive for when list page loads
     localStorage.setItem("amrita_auto_running", "true");
     isRunning = true;
 
@@ -751,7 +759,6 @@
       { action: "CLOSE_AND_REFRESH_PORTAL", origin: originListPage },
       (res) => {
         if (chrome.runtime.lastError || !res || !res.success) {
-          // Fallback: navigate in current tab
           const listUrl = originListPage === "class-feedback"
             ? "https://students.amrita.edu/client/class-feedback"
             : "https://students.amrita.edu/client/course-feedback-list";
@@ -780,12 +787,12 @@
     const widget = document.createElement("div");
     widget.id = "amrita-automator-widget";
     widget.innerHTML = `
-      <div class="aaw-header" tabindex="0" role="group" aria-label="Move feedback panel. Drag or use arrow keys; Shift moves faster.">
+      <div class="aaw-header" tabindex="0" role="group" aria-label="Move feedback panel.">
         <div class="aaw-brand"><span class="aaw-grip" aria-hidden="true">⠿</span><div><div class="aaw-title">Amrita Feedback</div><div class="aaw-subtitle">Drag to move</div></div></div>
         <div class="aaw-header-actions">
-          <a class="aaw-btn-icon aaw-github-star" href="https://github.com/Ganesh2006646/Amrita-Feedback-Automation" target="_blank" rel="noopener noreferrer" title="Star on GitHub" aria-label="Star on GitHub (opens repository in a new tab)"><span aria-hidden="true">☆</span></a>
-          <button type="button" class="aaw-btn-icon" id="aaw-min-btn" title="Minimize panel" aria-label="Minimize panel" aria-expanded="true">−</button>
-          <button type="button" class="aaw-btn-icon aaw-close-btn" id="aaw-close-btn" title="Close panel (click extension icon to reopen)" aria-label="Close panel">×</button>
+          <a class="aaw-btn-icon aaw-github-star" href="https://github.com/Ganesh2006646/Amrita-Feedback-Automation" target="_blank" rel="noopener noreferrer" title="Star on GitHub" aria-label="Star on GitHub"><span aria-hidden="true">☆</span></a>
+          <button type="button" class="aaw-btn-icon" id="aaw-min-btn" title="Minimize" aria-label="Minimize panel" aria-expanded="true">−</button>
+          <button type="button" class="aaw-btn-icon aaw-close-btn" id="aaw-close-btn" title="Close (click extension icon to reopen)" aria-label="Close panel">×</button>
         </div>
       </div>
       <div class="aaw-body">
@@ -806,13 +813,12 @@
             <button type="button" class="aaw-btn aaw-btn-check" id="aaw-submit-manual-otp-btn">Submit OTP</button>
           </div>
         </div>
-        <div class="aaw-footer">Selects Option 1 and submits feedback automatically. Click the extension icon to reopen after closing.</div>
+        <div class="aaw-footer">Selects Option 1 automatically. Click extension icon to reopen after closing.</div>
       </div>
     `;
 
     document.body.appendChild(widget);
 
-    // ── Event listeners ──
     document.getElementById("aaw-start-btn").addEventListener("click", startAutomation);
 
     document.getElementById("aaw-stop-btn").addEventListener("click", () => {
@@ -823,11 +829,11 @@
 
     document.getElementById("aaw-min-btn").addEventListener("click", () => {
       const minimized = widget.classList.toggle("minimized");
-      const button = document.getElementById("aaw-min-btn");
-      button.textContent = minimized ? "+" : "−";
-      button.setAttribute("aria-expanded", String(!minimized));
-      button.setAttribute("aria-label", minimized ? "Expand panel" : "Minimize panel");
-      button.title = minimized ? "Expand panel" : "Minimize panel";
+      const btn = document.getElementById("aaw-min-btn");
+      btn.textContent = minimized ? "+" : "−";
+      btn.setAttribute("aria-expanded", String(!minimized));
+      btn.setAttribute("aria-label", minimized ? "Expand panel" : "Minimize panel");
+      btn.title = minimized ? "Expand panel" : "Minimize panel";
       widget.dispatchEvent(new Event("aaw-resize"));
     });
 
@@ -866,8 +872,8 @@
 
     function place(left, top) {
       const rect = widget.getBoundingClientRect();
-      const x = Math.max(0, Math.min(left, Math.max(0, window.innerWidth - rect.width)));
-      const y = Math.max(0, Math.min(top, Math.max(0, window.innerHeight - rect.height)));
+      const x = Math.max(0, Math.min(left, Math.max(0, window.innerWidth  - rect.width)));
+      const y = Math.max(0, Math.min(top,  Math.max(0, window.innerHeight - rect.height)));
       Object.assign(widget.style, { left: `${x}px`, top: `${y}px`, right: "auto", bottom: "auto" });
     }
 
@@ -898,19 +904,19 @@
       if (header.hasPointerCapture(event.pointerId)) header.releasePointerCapture(event.pointerId);
     }
 
-    header.addEventListener("pointerup", endDrag);
-    header.addEventListener("pointercancel", endDrag);
-    header.addEventListener("lostpointercapture", endDrag);
+    header.addEventListener("pointerup",           endDrag);
+    header.addEventListener("pointercancel",        endDrag);
+    header.addEventListener("lostpointercapture",   endDrag);
 
     header.addEventListener("keydown", event => {
       if (event.target !== header) return;
-      const directions = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
-      const direction = directions[event.key];
-      if (!direction) return;
+      const directions = { ArrowLeft: [-1,0], ArrowRight: [1,0], ArrowUp: [0,-1], ArrowDown: [0,1] };
+      const dir = directions[event.key];
+      if (!dir) return;
       event.preventDefault();
       const rect = widget.getBoundingClientRect();
       const step = event.shiftKey ? 40 : 10;
-      place(rect.left + direction[0] * step, rect.top + direction[1] * step);
+      place(rect.left + dir[0] * step, rect.top + dir[1] * step);
     });
 
     window.addEventListener("resize", keepInView);
@@ -944,11 +950,12 @@
 
   function stopAutomation() {
     isRunning = false;
-    localStorage.removeItem("amrita_auto_running"); // Clean removal, not "false"
+    isStepRunning = false;
+    localStorage.removeItem("amrita_auto_running");
     const startBtn = document.getElementById("aaw-start-btn");
-    const stopBtn = document.getElementById("aaw-stop-btn");
+    const stopBtn  = document.getElementById("aaw-stop-btn");
     if (startBtn) startBtn.style.display = "flex";
-    if (stopBtn) stopBtn.style.display = "none";
+    if (stopBtn)  stopBtn.style.display  = "none";
   }
 
   function log(msg) {
